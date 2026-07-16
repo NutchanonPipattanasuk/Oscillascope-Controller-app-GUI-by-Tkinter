@@ -86,6 +86,18 @@ class GraphicUserInterface(tk.Tk):
         #--------------------Left Frame-------------------------------------------------
         left_frame = tk.Frame(body_frame) # กรอบฝั่งซ้าย 
         left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True) #เมื่อเหลือพื้นที่เหลือใน Body Frame ฝั่งซ้ายจะเป็นคนเอาไปเอง
+
+        #------------ CMD Frame ---------------------------------------------------
+        cmd_frame = tk.Frame(left_frame, bd=2, relief= tk.SOLID)
+        cmd_frame.pack(fill = tk.X, pady=5)
+
+        tk.Label(cmd_frame,text="SCPI Command:").grid(row=0, column=0, padx=5, pady=5)
+
+        self.cmd_entry = tk.Entry(cmd_frame, width=30)
+        self.cmd_entry.grid(row=0, column=1, padx=5, pady=5)
+        tk.Button(cmd_frame, text="Send", command=self.send_command).grid(row=0, column=2, padx=5, pady=5)
+        #-------------------------------------------------------------------------
+
         #------------------------------------------------------------------------------
 
         #-------------------------- Right Frame : Console -------------------------------------------
@@ -167,6 +179,29 @@ class GraphicUserInterface(tk.Tk):
         self.log("Disconnected from instrument.")
     #------------------------------------------------------------------------------------------------------
 
+    #---------------- SCPI -------------------------------------------------------------
+
+    def send_command(self):
+        cmd = self.cmd_entry.get().strip() #ดึงข้อความจากช่องพิมพ์
+
+        if not cmd:
+            return
+        
+        try:
+            if '?' in cmd:
+                self.log(f"> {cmd} (Query)") #พิมพ์บอกใน Console ว่ากำลังส่งคำสั่งถาม
+                response = self.controller.query(cmd) #เรียกใช้ query 
+                self.log(f"< {response}") #พิมพ์คำตอบที่ได้ลง Console
+            else:
+                self.log(f"> {cmd}") #ถ้าไม่มี '?' แสดงว่าเป็นคำสั่งสั่งการเฉยๆ
+                self.controller.write(cmd) #เรียกใช้ write 
+
+            self.cmd_entry.delete(0, tk.END) # เมื่อส่งเสร็จแล้วลบข้อความในช่องพิมพ์ทิ้งเพื่อเตรียมพิมพ์คำสั่งต่อไป
+
+        except Exception as e:
+            self.log(f"Error: {e}")
+
+    #-----------------------------------------------------------------------------------
 
 
 if __name__ == "__main__":
