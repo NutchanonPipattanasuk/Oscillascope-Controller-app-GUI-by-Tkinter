@@ -45,6 +45,12 @@ class OscillascopeController:
 
     def query(self, command): #ส่งคำสั่งไปและรับข้อความกลับมา
         return self.inst.query(command).strip() 
+    
+    def get_measurement(self, item, source):
+        try:
+            return self.query(f":MEASure:ITEM? {item},{source}")
+        except Exception as e:
+            return f"Error: {e}"
         
     
 class GraphicUserInterface(tk.Tk):
@@ -62,7 +68,7 @@ class GraphicUserInterface(tk.Tk):
 
     def setup_ui(self): #Funcion ในการจัดการ UI
 
-        #--------------- Connect Frame -----------------------------------------
+        #------ Connect Frame -----------------------------------------
         connect_frame = tk.Frame(self, bd=2, relief= tk.RAISED) #เป็น Frame ที่ใช้เก็บปุ่ม connect, disconnect, refresh และ dropdown ชื่อresource
         connect_frame.pack(fill=tk.X, padx=10, pady=5)
         tk.Label(connect_frame, text="VISA Resource:").grid(row=0, column=0, padx=5, pady=5)
@@ -79,15 +85,15 @@ class GraphicUserInterface(tk.Tk):
         self.btn_disconnect.grid(row=0, column=4, padx=5, pady=5)
         #--------------------------------------------------------------------------
 
-        #-------------------- Body Frame ----------------------------------------------
+        #----- Body Frame ----------------------------------------------
         body_frame = tk.Frame(self)
         body_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5) #ขยายตัวตามหน้าต่างโปรแกรม
 
-        #--------------------Left Frame-------------------------------------------------
+        #----- Left Frame -------------------------------------------------
         left_frame = tk.Frame(body_frame) # กรอบฝั่งซ้าย 
         left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True) #เมื่อเหลือพื้นที่เหลือใน Body Frame ฝั่งซ้ายจะเป็นคนเอาไปเอง
 
-        #------------ CMD Frame ---------------------------------------------------
+        #----- CMD Frame ---------------------------------------------------
         cmd_frame = tk.Frame(left_frame, bd=2, relief= tk.SOLID)
         cmd_frame.pack(fill = tk.X, pady=5)
 
@@ -98,9 +104,31 @@ class GraphicUserInterface(tk.Tk):
         tk.Button(cmd_frame, text="Send", command=self.send_command).grid(row=0, column=2, padx=5, pady=5)
         #-------------------------------------------------------------------------
 
+        #------ Measure Frame ------------------------------------------
+
+        meas_frame = tk.Frame(left_frame, bd=2, relief=tk.GROOVE)
+        meas_frame.pack(fill=tk.X, pady=5)
+
+        tk.Label(meas_frame, text="Channel:").grid(row=0, column=0, padx=5, pady=5)
+
+        #Menu dropdown เลือก Channel
+        self.chan_var = tk.StringVar(value="CHANel1")
+        chan_opt = ["CHANnel1", "CHANnel2", "CHANnel3", "CHANnel4"]
+        tk.OptionMenu(meas_frame, self.chan_var, *chan_opt).grid(row=0, column=1, padx=5, pady=5)
+
+        #Menu Dropdown เลือก Measure option
+        self.meas_var = tk.StringVar(value="VPP")
+        meas_opts = ["VPP", "VMIN", "VMAX", "PERiod", "FREQuency"] 
+        tk.OptionMenu(meas_frame, self.meas_var, *meas_opts).grid(row=0, column=3, padx=5, pady=5)
+
+        # ปุ่มกดเพื่ออ่านค่า
+        tk.Button(meas_frame, text="Read Value", command=self.read_measurement).grid(row=0, column=4, padx=5, pady=5)
+
+        #-------------------------------------------------------------------------------
+
         #------------------------------------------------------------------------------
 
-        #-------------------------- Right Frame : Console -------------------------------------------
+        #----- Right Frame : Console -------------------------------------------
         right_frame = tk.Frame(body_frame, width=350) # กรอบฝั่งขวา 
         right_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=10)
         right_frame.pack_propagate(False) #ปิดระบบหด/ขยายตัวอัตโนมัติ
@@ -118,7 +146,7 @@ class GraphicUserInterface(tk.Tk):
         tk.Button(right_frame, text="Clear Console", command=self.clear_response).pack(fill=tk.X, pady=5) #ปุ่ม Clear console
         #----------------------------------------------------------------------------
 
-    #------------------ Helper --------------------------------------------------------------
+    #-------- Helper --------------------------------------------------------------
     def log(self, msg):
         self.response_text.insert(tk.END, msg + "\n") #พิมพ์ข้อความใหม่ต่อท้ายลงไปในกล่องข้อความ
         self.response_text.see(tk.END) #เลื่อนหน้าจอลงมาล่างสุดอัตโนมัติ
@@ -133,7 +161,7 @@ class GraphicUserInterface(tk.Tk):
         variable.set(options[0] if options else "")
     #----------------------------------------------------------------------------------------
 
-    #-------------------- Connection -------------------------------------------------------------
+    #---- Connection -------------------------------------------------------------
     def refresh_resource(self):
         self.btn_refresh.config(state=tk.DISABLED) #ปิดปุ่มชั่วคราว
         self.log("Searching for VISA resources...")
@@ -179,7 +207,7 @@ class GraphicUserInterface(tk.Tk):
         self.log("Disconnected from instrument.")
     #------------------------------------------------------------------------------------------------------
 
-    #---------------- SCPI -------------------------------------------------------------
+    #---- SCPI -------------------------------------------------------------
 
     def send_command(self):
         cmd = self.cmd_entry.get().strip() #ดึงข้อความจากช่องพิมพ์
@@ -202,6 +230,25 @@ class GraphicUserInterface(tk.Tk):
             self.log(f"Error: {e}")
 
     #-----------------------------------------------------------------------------------
+
+    #---- Measurement -------------------------------------------------
+
+    def read_measurement(self):
+        if not self.controller.inst: #เช็คว่าเชื่อมต่อเครื่องอยู่มั้ย
+            messagebox.showwarning("Warning", "Not connected to an instrument.")
+            return
+
+        #ดึงค่าจาก Dropdown
+        chan = self.chan_var.get() 
+        meas = self.meas_var.get()
+
+        self.log(f"Reading {meas} on {chan}...")
+        self.update_idletasks()
+
+        val = self.controller.get_measurement(meas, chan) 
+        
+        self.log(f"[{chan} - {meas}]: {val}") #ปริ้นต์ค่าที่อ่านได้ลง Console
+    #-------------------------------------------------------------------------
 
 
 if __name__ == "__main__":
