@@ -2,6 +2,13 @@ import tkinter as tk
 import pyvisa
 from tkinter import messagebox, filedialog
 import time
+import threading
+
+import matplotlib
+matplotlib.use("TkAgg")
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
+
 
 
 class OscillascopeController:
@@ -51,6 +58,37 @@ class OscillascopeController:
             return self.query(f":MEASure:ITEM? {item},{source}")
         except Exception as e:
             return f"Error: {e}"
+        
+    def get_waveform(self, channel: int):
+        ch = f"CHANnel{channel}"
+        # 1. ตั้งค่าการดึงข้อมูล (บอกเครื่องว่าเราอยากได้อะไร)
+        self.write(f":WAVeform:SOURce {ch}") # เลือกช่องสัญญาณ
+        self.write(":WAVeform:FORMat BYTE")  # ขอข้อมูลในรูปแบบ BYTE (ตัวเลข 0-255)
+        self.write(":WAVeform:POINts:MODE NORMal") 
+        self.write(":WAVeform:POINts 1200") # ขอความละเอียด 1200 จุด
+        # 2. ขอค่า Preamble (กุญแจถอดรหัส)
+        # เครื่องจะส่งชุดตัวเลขบอกสเกลมา เช่น ระยะห่างของเวลาแต่ละจุด (xinc), ตัวคูณแรงดัน (yinc)
+        preamble_str = self.query(":WAVeform:PREamble?")
+        pre = [float(v) for v in preamble_str.split(',')]
+        xinc, xor, xref = pre[4], pre[5], pre[6] # แกน X (สเกลเวลา)
+        yinc, yor, yref = pre[7], pre[8], pre[9] # แกน Y (สเกลแรงดันไฟฟ้า)
+        # 3. โหลดข้อมูลดิบ
+        self.write(":WAVeform:DATA?")
+        time.sleep(0.1) # รอเครื่องประมวลผล
+        raw = self.inst.read_raw() # อ่านข้อมูลกลับมาทั้งหมด
+        # 4. ตัดส่วนหัวทิ้ง
+        # ข้อมูลดิบที่ส่งมาจะมี "ส่วนหัว" แปะมาด้วย เช่น "#800001200" เราต้องตัดมันทิ้งไปก่อน
+        if raw[0:1] == b'#':
+            n = int(chr(raw[1]))
+            length = int(raw[2:2 + n])
+            data = raw[2 + n: 2 + n + length] # เอาเฉพาะข้อมูลเนื้อๆ
+        else:
+            data = raw
+        # 5. แปลงข้อมูลดิบให้เป็น เวลา(s) และ แรงดัน(V) ด้วยกุญแจถอดรหัสในข้อ 2
+        times = [(i - xref) * xinc + xor for i in range(len(data))]
+        voltages = [(b - yref) * yinc + yor for b in data]
+        label = f"CH{channel}"
+        return times, voltages, label # ส่งค่าแกน X, แกน Y และชื่อช่องสัญญาณ กลับไปให้คนเรียก
         
     
 class GraphicUserInterface(tk.Tk):
@@ -106,7 +144,7 @@ class GraphicUserInterface(tk.Tk):
 
         #------ Measure Frame ------------------------------------------
 
-        meas_frame = tk.Frame(left_frame, bd=2, relief=tk.GROOVE)
+        meas_frame = tk.Frame(left_frame, bd=2, relief=tk.SOLID)
         meas_frame.pack(fill=tk.X, pady=5)
 
         tk.Label(meas_frame, text="Channel:").grid(row=0, column=0, padx=5, pady=5)
@@ -125,6 +163,47 @@ class GraphicUserInterface(tk.Tk):
         tk.Button(meas_frame, text="Read Value", command=self.read_measurement).grid(row=0, column=4, padx=5, pady=5)
 
         #-------------------------------------------------------------------------------
+
+        #---- Waveform + SaveIMG Frame ----------------------------------------------------
+
+        wave_frame = tk.Frame(left_frame, bd=2, relief=tk.SOLID)
+        wave_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        # Controls row
+        ctrl_row = tk.Frame(wave_frame)
+        ctrl_row.pack(fill=tk.X)
+
+        tk.Label(ctrl_row, text="Channel:").grid(row=0, column=0, padx=5, pady=5)
+        self.wave_chan_var = tk.StringVar(value="1")
+        ch = ["1", "2", "3", "4"]
+        tk.OptionMenu(ctrl_row, self.wave_chan_var, *ch).grid(row=0, column=1, padx=5, pady=5)
+            
+
+        self.btn_read_wave = tk.Button(ctrl_row, text="Read Waveform", command=self.read_waveform)
+        self.btn_read_wave.grid(row=0, column=2, padx=5, pady=5)
+
+        self.btn_save_image = tk.Button(ctrl_row, text="Save Image (PNG)", command=self.save_image, state=tk.DISABLED)
+        self.btn_save_image.grid(row=0, column=3, padx=5, pady=5)
+
+        # Matplotlib canvas
+        self.fig = Figure(figsize=(5, 3), dpi=96)
+        self.ax = self.fig.add_subplot(111)
+        self.ax.set_facecolor("#0d1117")
+        self.fig.patch.set_facecolor("#161b22")
+        self.ax.tick_params(colors="#c9d1d9")
+        self.ax.spines["bottom"].set_color("#30363d")
+        self.ax.spines["top"].set_color("#30363d")
+        self.ax.spines["left"].set_color("#30363d")
+        self.ax.spines["right"].set_color("#30363d")
+        self.ax.set_xlabel("Time (s)", color="#8b949e")
+        self.ax.set_ylabel("Voltage (V)", color="#8b949e")
+        self.ax.set_title("No waveform yet", color="#8b949e")
+        self.fig.tight_layout()
+
+        self.canvas = FigureCanvasTkAgg(self.fig, master=wave_frame)
+        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=5, pady=(0, 5))
+
+        #--------------------------------------------------------------------------------
 
         #------------------------------------------------------------------------------
 
@@ -249,6 +328,78 @@ class GraphicUserInterface(tk.Tk):
         
         self.log(f"[{chan} - {meas}]: {val}") #ปริ้นต์ค่าที่อ่านได้ลง Console
     #-------------------------------------------------------------------------
+
+    #---- Waveform -----------------------------------------------------------------
+
+    def read_waveform(self):
+        if not self.controller.inst:
+            messagebox.showwarning("Warning", "Not connected to an instrument.")
+            return
+
+        ch = int(self.wave_chan_var.get())
+        self.btn_read_wave.config(state=tk.DISABLED)
+        self.log(f"Reading waveform from CH{ch}...")
+        self.update_idletasks()
+
+        def _do_read():
+            try:
+                times, volts, label = self.controller.get_waveform(ch)
+                self.after(0, lambda: self._on_waveform(times, volts, label, None))
+            except Exception as e:
+                self.after(0, lambda err=e: self._on_waveform(None, None, None, err))
+
+        threading.Thread(target=_do_read, daemon=True).start()
+
+    def _on_waveform(self, times, volts, label, error):
+        self.btn_read_wave.config(state=tk.NORMAL)
+        if error:
+            self.log(f"Waveform error: {error}")
+            messagebox.showerror("Error", str(error))
+            return
+
+        self._times = times
+        self._voltages = volts
+        self._wave_label = label
+
+        # Plot
+        self.ax.clear()
+        self.ax.set_facecolor("#0d1117")
+        self.ax.tick_params(colors="#c9d1d9")
+        for spine in self.ax.spines.values():
+            spine.set_color("#30363d")
+
+        self.ax.plot(times, volts, color="#58a6ff", linewidth=0.8, label=label)
+        self.ax.set_xlabel("Time (s)", color="#8b949e")
+        self.ax.set_ylabel("Voltage (V)", color="#8b949e")
+        self.ax.set_title(f"Waveform — {label}  ({len(times)} points)", color="#c9d1d9")
+        self.ax.legend(facecolor="#161b22", labelcolor="#c9d1d9", edgecolor="#30363d")
+        self.ax.grid(True, color="#21262d", linewidth=0.5)
+        self.fig.tight_layout()
+        self.canvas.draw()
+
+        self.btn_save_image.config(state=tk.NORMAL)
+        self.log(f"Waveform read: {len(times)} points  ({label})")
+
+    #---------------------------------------------------------------------------------
+
+    #---- Waveform -----------------------------------------------------------------
+
+    def save_image(self):
+        if not self._times:
+            return
+        filepath = filedialog.asksaveasfilename(
+            defaultextension=".png",
+            filetypes=[("PNG files", "*.png"), ("All files", "*.*")],
+            title="Save Waveform as Image"
+        )
+        if filepath:
+            try:
+                self.fig.savefig(filepath, dpi=150, facecolor=self.fig.get_facecolor())
+                self.log(f"Image saved: {filepath}")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to save Image:\n{e}")
+
+    #---------------------------------------------------------------------------------
 
 
 if __name__ == "__main__":
